@@ -1,24 +1,25 @@
 export type SessionStatus = "waiting" | "active" | "ended"
 
 export interface Presentation {
-  id: string
+  id: number
   title: string
   created_at?: string
 }
 
 export interface Session {
-  id: string
-  presentation_id: string
-  code: string
-  status: SessionStatus
+  id: number
+  presentation_id: number
+  room_code: string
   current_slide: number
+  status: SessionStatus
   created_at?: string
 }
 
 export interface Participant {
-  id: string
-  session_id: string
+  id: number
+  session_id: number
   name: string
+  student_number: string | null
   score: number
-  joined_at?: string
+  created_at?: string
 }

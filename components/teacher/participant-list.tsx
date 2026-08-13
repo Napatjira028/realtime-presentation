@@ -38,7 +38,12 @@ export function ParticipantList({ participants }: { participants: Participant[] 
               >
                 {initials(p.name)}
               </span>
-              <span className="truncate text-sm font-medium">{p.name}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{p.name}</span>
+                {p.student_number && (
+                  <span className="block truncate text-xs text-muted-foreground">#{p.student_number}</span>
+                )}
+              </span>
             </li>
           ))}
         </ul>

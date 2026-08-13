@@ -7,27 +7,28 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js"
  *  - NEXT_PUBLIC_SUPABASE_URL
  *  - NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
  *
- * Assumed schema (adjust if your columns differ):
+ * Existing public schema (do not modify):
  *
  *  presentations
- *    id          uuid  (pk)
+ *    id          bigint (pk, identity)
  *    title       text
  *    created_at  timestamptz
  *
  *  sessions            -- a live "room" instance of a presentation
- *    id              uuid (pk)
- *    presentation_id uuid (fk -> presentations.id)
- *    code            text  (unique 6-digit room code)
- *    status          text  ('waiting' | 'active' | 'ended')
- *    current_slide   int   (default 0)
+ *    id              bigint (pk, identity)
+ *    presentation_id bigint (fk -> presentations.id)
+ *    room_code       text  (unique 6-digit room code)
+ *    current_slide   int   (default 1)
+ *    status          text  (default 'waiting' | 'active' | 'ended')
  *    created_at      timestamptz
  *
  *  participants        -- students who joined a session
- *    id          uuid (pk)
- *    session_id  uuid (fk -> sessions.id)
- *    name        text
- *    score       int  (default 0)
- *    joined_at   timestamptz
+ *    id             bigint (pk, identity)
+ *    session_id     bigint (fk -> sessions.id)
+ *    name           text
+ *    student_number text
+ *    score          int  (default 0)
+ *    created_at     timestamptz
  *
  *  questions, answers  -- used by later steps (quiz flow)
  */

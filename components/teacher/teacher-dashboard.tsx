@@ -51,9 +51,9 @@ export function TeacherDashboard() {
             .from("sessions")
             .insert({
               presentation_id: presentation.id,
-              code,
+              room_code: code,
               status: "waiting",
-              current_slide: 0,
+              current_slide: 1,
             })
             .select()
             .single()
@@ -86,7 +86,7 @@ export function TeacherDashboard() {
       .from("participants")
       .select("*")
       .eq("session_id", sessionId)
-      .order("joined_at", { ascending: true })
+      .order("created_at", { ascending: true })
     if (data) setParticipants(data as Participant[])
   }, [sessionId])
 
@@ -119,7 +119,7 @@ export function TeacherDashboard() {
   const copyCode = useCallback(async () => {
     if (!session) return
     try {
-      await navigator.clipboard.writeText(session.code)
+      await navigator.clipboard.writeText(session.room_code)
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -214,7 +214,7 @@ export function TeacherDashboard() {
           Room code
         </h2>
         <div className="mt-2 flex items-center gap-3">
-          <p className="font-mono text-4xl font-bold tracking-[0.2em] tabular-nums">{session.code}</p>
+          <p className="font-mono text-4xl font-bold tracking-[0.2em] tabular-nums">{session.room_code}</p>
           <button
             type="button"
             onClick={copyCode}
