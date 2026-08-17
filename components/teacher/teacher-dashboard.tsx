@@ -320,6 +320,19 @@ const uploadPdf = useCallback(async (file: File) => {
           )}
           {isActive ? "Presentation started" : starting ? "Starting…" : "Start presentation"}
         </button>
+        {pdfUrl && (
+  <div className="mt-6">
+    <PdfStage
+      fileUrl={pdfUrl}
+      pageNumber={session.current_slide ?? 1}
+      emptyState={
+        <div className="text-sm text-muted-foreground">
+          No PDF loaded.
+        </div>
+      }
+    />
+  </div>
+)}
       </section>
 
       {/* Participants */}
