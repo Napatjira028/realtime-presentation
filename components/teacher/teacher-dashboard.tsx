@@ -18,6 +18,9 @@ export function TeacherDashboard() {
   const [creating, setCreating] = useState(false)
   const [starting, setStarting] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [pdfFile, setPdfFile] = useState<File | null>(null)
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
+  const [uploadingPdf, setUploadingPdf] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const configured = isSupabaseConfigured
