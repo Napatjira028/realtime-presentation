@@ -284,7 +284,7 @@ const uploadPdf = useCallback(async (file: File) => {
   <input
     type="file"
     accept="application/pdf"
-    disabled={uploadingPdf || isActive}
+    disabled={uploadingPdf}
     onChange={(event) => {
       const file = event.target.files?.[0]
       if (!file) return
