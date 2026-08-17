@@ -5,6 +5,7 @@ import { ArrowRight, CheckCircle2, Loader2, Radio } from "lucide-react"
 import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase/client"
 import type { Participant, Session } from "@/lib/types"
 import { ConfigNotice } from "@/components/config-notice"
+import { PdfStage } from "@/components/presentation/pdf-stage"
 
 export function StudentJoin() {
   const [roomCode, setRoomCode] = useState("")
@@ -16,9 +17,30 @@ export function StudentJoin() {
   // Set once the student has successfully joined.
   const [session, setSession] = useState<Session | null>(null)
   const [participant, setParticipant] = useState<Participant | null>(null)
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
 
   const configured = isSupabaseConfigured
+  const refreshPdfUrl = useCallback(async (presentationId: number) => {
+  const supabase = getSupabaseClient()
+  if (!supabase) return
 
+  const { data, error } = await supabase
+    .from("presentations")
+    .select("file_url")
+    .eq("id", presentationId)
+    .maybeSingle()
+
+  if (error) {
+    console.error("Failed to load presentation PDF:", error)
+    return
+  }
+
+  setPdfUrl(data?.file_url ?? null)
+}, [])
+useEffect(() => {
+  if (!session?.presentation_id) return
+  refreshPdfUrl(session.presentation_id)
+}, [session?.presentation_id, refreshPdfUrl])
   const handleJoin = useCallback(
     async (event: React.FormEvent) => {
       event.preventDefault()
