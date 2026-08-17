@@ -12,6 +12,9 @@ export interface Session {
   room_code: string
   current_slide: number
   status: SessionStatus
+  file_url: string | null
+  file_path: string | null
+  total_slides: number
   created_at?: string
 }
 

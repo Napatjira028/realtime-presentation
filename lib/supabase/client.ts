@@ -20,7 +20,12 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js"
  *    room_code       text  (unique 6-digit room code)
  *    current_slide   int   (default 1)
  *    status          text  (default 'waiting' | 'active' | 'ended')
+ *    file_url        text  (public URL of the uploaded slides PDF)
+ *    file_path       text  (storage path of the uploaded PDF, for cleanup)
+ *    total_slides    int   (default 0, page count of the uploaded PDF)
  *    created_at      timestamptz
+ *
+ *  Storage bucket: "slides" (public read) holds the uploaded PDF files.
  *
  *  participants        -- students who joined a session
  *    id             bigint (pk, identity)

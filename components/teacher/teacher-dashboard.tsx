@@ -7,6 +7,7 @@ import { generateRoomCode } from "@/lib/room"
 import type { Participant, Session } from "@/lib/types"
 import { ConfigNotice } from "@/components/config-notice"
 import { ParticipantList } from "@/components/teacher/participant-list"
+import { PdfStage } from "@/components/presentation/pdf-stage"
 
 const MAX_CODE_ATTEMPTS = 5
 
@@ -17,6 +18,9 @@ export function TeacherDashboard() {
   const [creating, setCreating] = useState(false)
   const [starting, setStarting] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [pdfFile, setPdfFile] = useState<File | null>(null)
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
+  const [uploadingPdf, setUploadingPdf] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const configured = isSupabaseConfigured
@@ -126,7 +130,45 @@ export function TeacherDashboard() {
       // Clipboard may be unavailable; ignore silently.
     }
   }, [session])
+const uploadPdf = useCallback(async (file: File) => {
+  const supabase = getSupabaseClient()
+  if (!supabase || !session) return
 
+  setUploadingPdf(true)
+  setError(null)
+
+  try {
+    const filePath = `${session.id}/${Date.now()}-${file.name}`
+
+    const { error: uploadError } = await supabase.storage
+      .from("presentations")
+      .upload(filePath, file)
+
+    if (uploadError) throw uploadError
+
+    const { data } = supabase.storage
+      .from("presentations")
+      .getPublicUrl(filePath)
+
+    const publicUrl = data.publicUrl
+
+    const { error: updateError } = await supabase
+      .from("presentations")
+      .update({ file_url: publicUrl })
+      .eq("id", session.presentation_id)
+
+    if (updateError) throw updateError
+
+    setPdfFile(file)
+    setPdfUrl(publicUrl)
+  } catch (err) {
+    setError(
+      err instanceof Error ? err.message : "Failed to upload PDF."
+    )
+  } finally {
+    setUploadingPdf(false)
+  }
+}, [session])
   const startPresentation = useCallback(async () => {
     const supabase = getSupabaseClient()
     if (!supabase || !session) return
@@ -234,7 +276,37 @@ export function TeacherDashboard() {
         </p>
 
         {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
+<div className="mt-4 space-y-2">
+  <label className="block text-sm font-medium">
+    Presentation PDF
+  </label>
 
+  <input
+    type="file"
+    accept="application/pdf"
+    disabled={uploadingPdf || isActive}
+    onChange={(event) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+
+      setPdfFile(file)
+      uploadPdf(file)
+    }}
+    className="block w-full text-sm"
+  />
+
+  {uploadingPdf && (
+    <p className="text-sm text-muted-foreground">
+      Uploading PDF...
+    </p>
+  )}
+
+  {pdfFile && !uploadingPdf && (
+    <p className="text-sm text-muted-foreground">
+      Selected: {pdfFile.name}
+    </p>
+  )}
+</div>
         <button
           type="button"
           onClick={startPresentation}
@@ -248,6 +320,19 @@ export function TeacherDashboard() {
           )}
           {isActive ? "Presentation started" : starting ? "Starting…" : "Start presentation"}
         </button>
+        {pdfUrl && (
+  <div className="mt-6">
+    <PdfStage
+      fileUrl={pdfUrl}
+      pageNumber={session.current_slide ?? 1}
+      emptyState={
+        <div className="text-sm text-muted-foreground">
+          No PDF loaded.
+        </div>
+      }
+    />
+  </div>
+)}
       </section>
 
       {/* Participants */}
