@@ -7,6 +7,7 @@ import { generateRoomCode } from "@/lib/room"
 import type { Participant, Session } from "@/lib/types"
 import { ConfigNotice } from "@/components/config-notice"
 import { ParticipantList } from "@/components/teacher/participant-list"
+import { PdfStage } from "@/components/presentation/pdf-stage"
 
 const MAX_CODE_ATTEMPTS = 5
 
