@@ -156,11 +156,20 @@ useEffect(() => {
           {participant.name}, you&apos;re following slide {session.current_slide}. Questions from your teacher
           will appear here in real time.
         </p>
-        <div className="mt-6 rounded-xl border border-dashed border-border bg-muted/40 p-6">
-          <p className="text-sm text-muted-foreground">
-            Waiting for the current slide and questions to sync…
-          </p>
-        </div>
+        <div className="mt-6">
+  {pdfUrl ? (
+    <PdfStage
+      fileUrl={pdfUrl}
+      pageNumber={session.current_slide ?? 1}
+    />
+  ) : (
+    <div className="rounded-xl border border-dashed border-border bg-muted/40 p-6">
+      <p className="text-sm text-muted-foreground">
+        Loading presentation...
+      </p>
+    </div>
+  )}
+</div>
       </div>
     )
   }
