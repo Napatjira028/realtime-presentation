@@ -276,7 +276,37 @@ const uploadPdf = useCallback(async (file: File) => {
         </p>
 
         {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
+<div className="mt-4 space-y-2">
+  <label className="block text-sm font-medium">
+    Presentation PDF
+  </label>
 
+  <input
+    type="file"
+    accept="application/pdf"
+    disabled={uploadingPdf || isActive}
+    onChange={(event) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+
+      setPdfFile(file)
+      uploadPdf(file)
+    }}
+    className="block w-full text-sm"
+  />
+
+  {uploadingPdf && (
+    <p className="text-sm text-muted-foreground">
+      Uploading PDF...
+    </p>
+  )}
+
+  {pdfFile && !uploadingPdf && (
+    <p className="text-sm text-muted-foreground">
+      Selected: {pdfFile.name}
+    </p>
+  )}
+</div>
         <button
           type="button"
           onClick={startPresentation}
