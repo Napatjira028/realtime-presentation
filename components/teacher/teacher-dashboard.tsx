@@ -130,7 +130,45 @@ export function TeacherDashboard() {
       // Clipboard may be unavailable; ignore silently.
     }
   }, [session])
+const uploadPdf = useCallback(async (file: File) => {
+  const supabase = getSupabaseClient()
+  if (!supabase || !session) return
 
+  setUploadingPdf(true)
+  setError(null)
+
+  try {
+    const filePath = `${session.id}/${Date.now()}-${file.name}`
+
+    const { error: uploadError } = await supabase.storage
+      .from("presentations")
+      .upload(filePath, file)
+
+    if (uploadError) throw uploadError
+
+    const { data } = supabase.storage
+      .from("presentations")
+      .getPublicUrl(filePath)
+
+    const publicUrl = data.publicUrl
+
+    const { error: updateError } = await supabase
+      .from("presentations")
+      .update({ file_url: publicUrl })
+      .eq("id", session.presentation_id)
+
+    if (updateError) throw updateError
+
+    setPdfFile(file)
+    setPdfUrl(publicUrl)
+  } catch (err) {
+    setError(
+      err instanceof Error ? err.message : "Failed to upload PDF."
+    )
+  } finally {
+    setUploadingPdf(false)
+  }
+}, [session])
   const startPresentation = useCallback(async () => {
     const supabase = getSupabaseClient()
     if (!supabase || !session) return
