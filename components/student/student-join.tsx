@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowRight, CheckCircle2, Clock3, Flame, Loader2, Radio, Star, Zap } from "lucide-react"
+import { ArrowRight, CheckCircle2, Clock3, Flame, Loader2, Radio, Star, Trophy, Zap } from "lucide-react"
 import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase/client"
 import type { Participant, Session } from "@/lib/types"
 import { ConfigNotice } from "@/components/config-notice"
@@ -88,6 +88,10 @@ export function StudentJoin() {
   const [timeExpired, setTimeExpired] = useState(false)
   const [totalScore, setTotalScore] = useState(0)
   const [currentStreak, setCurrentStreak] = useState(0)
+  const [finalRank, setFinalRank] = useState<number | null>(null)
+  const [finalParticipantCount, setFinalParticipantCount] = useState(0)
+  const [finalCorrectAnswers, setFinalCorrectAnswers] = useState(0)
+  const [finalAnsweredQuestions, setFinalAnsweredQuestions] = useState(0)
   const questionStartedAtRef = useRef<number>(Date.now())
 
 
@@ -265,6 +269,148 @@ export function StudentJoin() {
       window.clearInterval(timer)
     }
   }, [session?.id, participant?.id, refreshGameStatus])
+
+
+  const refreshFinalResult = useCallback(async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase || !session?.id || !participant?.id) return
+
+    const { data: sessionParticipants, error: participantsErr } = await supabase
+      .from("participants")
+      .select("id, name")
+      .eq("session_id", session.id)
+
+    if (participantsErr) {
+      console.error("Failed to load final participants:", participantsErr)
+      return
+    }
+
+    const participantRows = (sessionParticipants ?? []) as Array<{
+      id: number
+      name: string
+    }>
+
+    setFinalParticipantCount(participantRows.length)
+
+    if (participantRows.length === 0) {
+      setFinalRank(null)
+      setFinalCorrectAnswers(0)
+      setFinalAnsweredQuestions(0)
+      return
+    }
+
+    const participantIds = participantRows.map((row) => row.id)
+
+    const { data: allAnswers, error: answersErr } = await supabase
+      .from("answers")
+      .select("participant_id, score, is_correct")
+      .in("participant_id", participantIds)
+
+    if (answersErr) {
+      console.error("Failed to load final answers:", answersErr)
+      return
+    }
+
+    const totals = new Map<
+      number,
+      { score: number; correctAnswers: number; answeredQuestions: number; name: string }
+    >()
+
+    for (const row of participantRows) {
+      totals.set(row.id, {
+        score: 0,
+        correctAnswers: 0,
+        answeredQuestions: 0,
+        name: row.name,
+      })
+    }
+
+    for (const answer of (allAnswers ?? []) as Array<{
+      participant_id: number
+      score: number | null
+      is_correct: boolean | null
+    }>) {
+      const current = totals.get(answer.participant_id)
+      if (!current) continue
+
+      current.score += Number(answer.score ?? 0)
+      current.answeredQuestions += 1
+      if (answer.is_correct) current.correctAnswers += 1
+    }
+
+    const ranked = Array.from(totals.entries())
+      .map(([participantId, value]) => ({ participantId, ...value }))
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        if (b.correctAnswers !== a.correctAnswers) {
+          return b.correctAnswers - a.correctAnswers
+        }
+        return a.name.localeCompare(b.name, "th")
+      })
+      .map((row, index, rows) => {
+        const previous = rows[index - 1]
+        const tiedWithPrevious =
+          previous &&
+          previous.score === row.score &&
+          previous.correctAnswers === row.correctAnswers
+
+        return {
+          ...row,
+          rank: tiedWithPrevious ? previous.rank : index + 1,
+        }
+      })
+
+    const mine = ranked.find((row) => row.participantId === participant.id)
+    if (!mine) {
+      setFinalRank(null)
+      setFinalCorrectAnswers(0)
+      setFinalAnsweredQuestions(0)
+      return
+    }
+
+    setFinalRank(mine.rank)
+    setTotalScore(mine.score)
+    setFinalCorrectAnswers(mine.correctAnswers)
+    setFinalAnsweredQuestions(mine.answeredQuestions)
+  }, [session?.id, participant?.id])
+
+  useEffect(() => {
+    if (!session?.id || !participant?.id || session.status !== "ended") return
+
+    refreshGameStatus()
+    refreshFinalResult()
+
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+
+    const channel = supabase
+      .channel(`student-final-result:${session.id}:${participant.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "answers" },
+        () => {
+          refreshGameStatus()
+          refreshFinalResult()
+        },
+      )
+      .subscribe()
+
+    const timer = window.setInterval(() => {
+      refreshGameStatus()
+      refreshFinalResult()
+    }, 2500)
+
+    return () => {
+      supabase.removeChannel(channel)
+      window.clearInterval(timer)
+    }
+  }, [
+    session?.id,
+    session?.status,
+    participant?.id,
+    refreshGameStatus,
+    refreshFinalResult,
+  ])
 
   const submitAnswer = useCallback(
     async (choice: "A" | "B" | "C" | "D") => {
@@ -729,8 +875,110 @@ useEffect(() => {
     )
   }
 
+  // ---- Ended presentation view ------------------------------------------
+  if (session && participant && session.status === "ended") {
+    const resultsRevealed = Boolean(session.reveal_results)
+
+    return (
+      <div className="mx-auto w-full max-w-xl rounded-2xl border border-border bg-card p-6 text-center shadow-sm sm:p-8">
+        <span className="mx-auto flex size-14 items-center justify-center rounded-full bg-primary/10">
+          <Trophy className="size-7 text-primary" aria-hidden="true" />
+        </span>
+
+        <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-primary">
+          Presentation ended
+        </p>
+
+        <h2 className="mt-2 text-2xl font-bold tracking-tight text-balance">
+          Great work, {participant.name}!
+        </h2>
+
+        <p className="mt-2 text-sm text-muted-foreground">
+          The activity has finished. Your answers are locked and your final score has been saved.
+        </p>
+
+        <div className="mt-6 grid grid-cols-2 gap-3">
+          <div className="rounded-xl border border-border bg-background p-4">
+            <div className="flex items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <Star className="size-4 text-amber-500" aria-hidden="true" />
+              Final score
+            </div>
+            <p className="mt-2 text-3xl font-bold tabular-nums text-primary">
+              {totalScore}
+            </p>
+            <p className="text-xs text-muted-foreground">points</p>
+          </div>
+
+          <div className="rounded-xl border border-border bg-background p-4">
+            <div className="text-xs font-medium text-muted-foreground">
+              Performance
+            </div>
+            <p className="mt-2 text-lg font-bold text-primary">
+              {finalCorrectAnswers} correct
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {finalAnsweredQuestions} answered
+            </p>
+          </div>
+        </div>
+
+        {resultsRevealed ? (
+          <div className="mt-5 rounded-2xl border border-primary/20 bg-primary/5 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">
+              Your final rank
+            </p>
+            <p className="mt-2 text-5xl font-black tabular-nums text-primary">
+              {finalRank ? `#${finalRank}` : "—"}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              out of {finalParticipantCount} student{finalParticipantCount === 1 ? "" : "s"}
+            </p>
+            {finalRank === 1 && (
+              <p className="mt-3 text-sm font-semibold text-amber-700">
+                🥇 Congratulations — 1st place!
+              </p>
+            )}
+            {finalRank === 2 && (
+              <p className="mt-3 text-sm font-semibold text-slate-600">
+                🥈 Congratulations — 2nd place!
+              </p>
+            )}
+            {finalRank === 3 && (
+              <p className="mt-3 text-sm font-semibold text-amber-800">
+                🥉 Congratulations — 3rd place!
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="mt-5 rounded-2xl border border-dashed border-primary/30 bg-primary/5 p-5">
+            <Loader2 className="mx-auto size-5 animate-spin text-primary" aria-hidden="true" />
+            <p className="mt-2 text-sm font-semibold">
+              Waiting for your teacher to reveal the results...
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Your ranking is still hidden. This page will update automatically.
+            </p>
+          </div>
+        )}
+
+        <dl className="mt-5 space-y-2 text-left">
+          <div className="flex items-center justify-between rounded-lg border border-border bg-background px-4 py-3">
+            <dt className="text-sm text-muted-foreground">Room code</dt>
+            <dd className="font-mono text-sm font-bold tracking-[0.12em]">
+              {session.room_code}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between rounded-lg border border-border bg-background px-4 py-3">
+            <dt className="text-sm text-muted-foreground">Student</dt>
+            <dd className="text-sm font-medium">{participant.name}</dd>
+          </div>
+        </dl>
+      </div>
+    )
+  }
+
   // ---- Waiting-room view ------------------------------------------------
-  if (session && participant) {
+  if (session && participant && session.status === "waiting") {
     return (
       <div className="mx-auto w-full max-w-md rounded-2xl border border-border bg-card p-8 text-center">
         <span className="mx-auto flex size-12 items-center justify-center rounded-full bg-accent">
