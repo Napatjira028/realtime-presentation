@@ -14,7 +14,7 @@ export interface Session {
   status: SessionStatus
 
   // The teacher controls when students are allowed to see their final rank.
-  reveal_results: boolean
+  reveal_results?: boolean
 
   file_url: string | null
   file_path: string | null
