@@ -8,15 +8,10 @@ import "@/lib/pdf"
 interface PdfViewerProps {
   fileUrl: string
   pageNumber: number
-  /** Called once the document loads, with its total page count. */
   onNumPages?: (numPages: number) => void
   className?: string
 }
 
-/**
- * Renders one PDF page at high resolution and fits it inside
- * the presentation container without cropping.
- */
 export function PdfViewer({
   fileUrl,
   pageNumber,
@@ -32,18 +27,7 @@ export function PdfViewer({
 
   const [pageAspect, setPageAspect] = useState<number | null>(null)
   const [error, setError] = useState(false)
-  const [pixelRatio, setPixelRatio] = useState(1)
 
-  // Detect real screen pixel density.
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      // Limit to 2.5 to keep the slide very sharp
-      // without making PDF rendering unnecessarily heavy.
-      setPixelRatio(Math.min(window.devicePixelRatio || 1, 2.5))
-    }
-  }, [])
-
-  // Watch the actual presentation area.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -68,17 +52,15 @@ export function PdfViewer({
     return () => observer.disconnect()
   }, [])
 
-  // Fit PDF completely inside the stage.
   let renderWidth: number | undefined
 
   if (size.width > 0 && size.height > 0 && pageAspect) {
     const containerAspect = size.width / size.height
 
-    if (pageAspect >= containerAspect) {
-      renderWidth = size.width
-    } else {
-      renderWidth = size.height * pageAspect
-    }
+    renderWidth =
+      pageAspect >= containerAspect
+        ? size.width
+        : size.height * pageAspect
   } else if (size.width > 0) {
     renderWidth = size.width
   }
@@ -128,16 +110,20 @@ export function PdfViewer({
         >
           {renderWidth ? (
             <Page
-              key={`${pageNumber}-${Math.round(renderWidth)}-${pixelRatio}`}
+              key={`${pageNumber}-${Math.round(renderWidth)}`}
               pageNumber={pageNumber}
               width={renderWidth}
-              devicePixelRatio={pixelRatio}
+
+              devicePixelRatio={2.5}
+
               renderMode="canvas"
               renderTextLayer={false}
               renderAnnotationLayer={false}
+
               onLoadSuccess={(page) => {
                 setPageAspect(page.width / page.height)
               }}
+
               loading={fallback}
             />
           ) : (
