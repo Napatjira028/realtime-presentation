@@ -20,6 +20,7 @@ export function TeacherDashboard() {
   const [copied, setCopied] = useState(false)
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
+  const [numPages, setNumPages] = useState(1)
   const [uploadingPdf, setUploadingPdf] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -119,6 +120,30 @@ export function TeacherDashboard() {
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [sessionId, fetchParticipants])
+
+  const changeSlide = useCallback(
+    async (nextSlide: number) => {
+      const supabase = getSupabaseClient()
+      if (!supabase || !session) return
+
+      const targetSlide = Math.max(1, Math.min(nextSlide, numPages))
+
+      const { data, error } = await supabase
+        .from("sessions")
+        .update({ current_slide: targetSlide })
+        .eq("id", session.id)
+        .select()
+        .single()
+
+      if (error) {
+        setError(error.message)
+        return
+      }
+
+      setSession(data as Session)
+    },
+    [session, numPages],
+  )
 
   const copyCode = useCallback(async () => {
     if (!session) return
@@ -325,12 +350,37 @@ const uploadPdf = useCallback(async (file: File) => {
     <PdfStage
       fileUrl={pdfUrl}
       pageNumber={session.current_slide ?? 1}
+      onNumPages={setNumPages}
       emptyState={
         <div className="text-sm text-muted-foreground">
           No PDF loaded.
         </div>
       }
     />
+
+    <div className="mt-4 flex items-center justify-between gap-3">
+      <button
+        type="button"
+        onClick={() => changeSlide((session.current_slide ?? 1) - 1)}
+        disabled={(session.current_slide ?? 1) <= 1}
+        className="rounded-lg border border-border px-4 py-2 text-sm font-medium transition-colors hover:border-primary/40 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        ← Previous
+      </button>
+
+      <span className="text-sm font-medium text-muted-foreground">
+        Slide {session.current_slide ?? 1} / {numPages}
+      </span>
+
+      <button
+        type="button"
+        onClick={() => changeSlide((session.current_slide ?? 1) + 1)}
+        disabled={(session.current_slide ?? 1) >= numPages}
+        className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Next →
+      </button>
+    </div>
   </div>
 )}
       </section>
