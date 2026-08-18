@@ -13,7 +13,7 @@ export interface Session {
   current_slide: number
   status: SessionStatus
 
-  // Teacher controls when students are allowed to see final ranking.
+  // The teacher controls when students are allowed to see their final rank.
   reveal_results: boolean
 
   file_url: string | null
