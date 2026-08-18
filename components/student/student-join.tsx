@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowRight, CheckCircle2, Loader2, Radio } from "lucide-react"
+import { ArrowRight, CheckCircle2, Clock3, Flame, Loader2, Radio, Star, Zap } from "lucide-react"
 import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase/client"
 import type { Participant, Session } from "@/lib/types"
 import { ConfigNotice } from "@/components/config-notice"
@@ -18,6 +18,8 @@ type QuestionRow = {
   choice_d: string | null
   correct_answer: string
   points: number
+  time_limit: number | null
+  speed_bonus: number | null
 }
 
 type AnswerRow = {
@@ -28,6 +30,7 @@ type AnswerRow = {
   is_correct: boolean
   score: number
   response_time: number | null
+  created_at?: string
 }
 
 function normalizeAnswer(value: string | null | undefined) {
@@ -81,6 +84,10 @@ export function StudentJoin() {
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null)
   const [submittedAnswer, setSubmittedAnswer] = useState<AnswerRow | null>(null)
   const [answerSubmitting, setAnswerSubmitting] = useState(false)
+  const [timeRemaining, setTimeRemaining] = useState(15)
+  const [timeExpired, setTimeExpired] = useState(false)
+  const [totalScore, setTotalScore] = useState(0)
+  const [currentStreak, setCurrentStreak] = useState(0)
   const questionStartedAtRef = useRef<number>(Date.now())
 
 
@@ -107,8 +114,11 @@ export function StudentJoin() {
 
     setActiveQuestion((current) => {
       if (current?.id !== nextQuestion?.id) {
+        const nextLimit = Math.max(5, nextQuestion?.time_limit ?? 15)
         setSelectedAnswer(null)
         setSubmittedAnswer(null)
+        setTimeRemaining(nextLimit)
+        setTimeExpired(false)
         questionStartedAtRef.current = Date.now()
       }
       return nextQuestion
@@ -161,10 +171,126 @@ export function StudentJoin() {
     }
   }, [session?.presentation_id, participant?.id, refreshQuestion])
 
+
+  useEffect(() => {
+    if (!activeQuestion) {
+      setTimeRemaining(15)
+      setTimeExpired(false)
+      return
+    }
+
+    const timeLimit = Math.max(5, activeQuestion.time_limit ?? 15)
+
+    if (submittedAnswer) {
+      const used = Math.max(0, submittedAnswer.response_time ?? 0)
+      setTimeRemaining(Math.max(0, timeLimit - used))
+      setTimeExpired(false)
+      return
+    }
+
+    const updateCountdown = () => {
+      const elapsed = Math.max(
+        0,
+        Math.floor((Date.now() - questionStartedAtRef.current) / 1000),
+      )
+      const remaining = Math.max(0, timeLimit - elapsed)
+
+      setTimeRemaining(remaining)
+
+      if (remaining <= 0) {
+        setTimeExpired(true)
+      }
+    }
+
+    updateCountdown()
+    const timer = window.setInterval(updateCountdown, 250)
+
+    return () => window.clearInterval(timer)
+  }, [activeQuestion?.id, activeQuestion?.time_limit, submittedAnswer?.id])
+
+
+  const refreshGameStatus = useCallback(async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase || !participant?.id) return
+
+    const { data: myAnswers, error: answersErr } = await supabase
+      .from("answers")
+      .select("score, is_correct, created_at")
+      .eq("participant_id", participant.id)
+      .order("created_at", { ascending: true })
+
+    if (answersErr) {
+      console.error("Failed to load student game status:", answersErr)
+      return
+    }
+
+    const answers = (myAnswers ?? []) as Array<{
+      score: number | null
+      is_correct: boolean | null
+      created_at?: string
+    }>
+
+    const score = answers.reduce((sum, answer) => sum + Number(answer.score ?? 0), 0)
+    setTotalScore(score)
+
+    let streak = 0
+    for (let index = answers.length - 1; index >= 0; index -= 1) {
+      if (answers[index].is_correct) streak += 1
+      else break
+    }
+    setCurrentStreak(streak)
+  }, [participant?.id])
+
+  useEffect(() => {
+    if (!session?.id || !participant?.id) return
+
+    refreshGameStatus()
+
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+
+    const answersChannel = supabase
+      .channel(`student-game-status-answers:${session.id}:${participant.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "answers" },
+        () => refreshGameStatus(),
+      )
+      .subscribe()
+
+    const timer = window.setInterval(refreshGameStatus, 2500)
+
+    return () => {
+      supabase.removeChannel(answersChannel)
+      window.clearInterval(timer)
+    }
+  }, [session?.id, participant?.id, refreshGameStatus])
+
   const submitAnswer = useCallback(
     async (choice: "A" | "B" | "C" | "D") => {
       const supabase = getSupabaseClient()
-      if (!supabase || !participant || !activeQuestion || submittedAnswer || answerSubmitting) return
+      if (
+        !supabase ||
+        !participant ||
+        !activeQuestion ||
+        submittedAnswer ||
+        answerSubmitting ||
+        timeExpired
+      ) {
+        return
+      }
+
+      const timeLimit = Math.max(5, activeQuestion.time_limit ?? 15)
+      const responseTime = Math.max(
+        0,
+        Math.floor((Date.now() - questionStartedAtRef.current) / 1000),
+      )
+
+      if (responseTime >= timeLimit) {
+        setTimeRemaining(0)
+        setTimeExpired(true)
+        return
+      }
 
       setSelectedAnswer(choice)
       setAnswerSubmitting(true)
@@ -188,7 +314,16 @@ export function StudentJoin() {
 
         const correctKey = correctChoiceKey(activeQuestion)
         const isCorrect = correctKey === choice
-        const responseTime = Math.max(0, Math.round((Date.now() - questionStartedAtRef.current) / 1000))
+        const basePoints = Math.max(1, activeQuestion.points ?? 1)
+        const maxSpeedBonus = Math.max(0, activeQuestion.speed_bonus ?? 0)
+
+        // Bonus falls gradually from the configured maximum down to zero.
+        // A correct answer is always required before any bonus is awarded.
+        const speedRatio = Math.max(0, (timeLimit - responseTime) / timeLimit)
+        const earnedSpeedBonus = isCorrect
+          ? Math.max(0, Math.round(maxSpeedBonus * speedRatio))
+          : 0
+        const score = isCorrect ? basePoints + earnedSpeedBonus : 0
 
         const { data, error: insertErr } = await supabase
           .from("answers")
@@ -197,7 +332,7 @@ export function StudentJoin() {
             question_id: activeQuestion.id,
             answer: choice,
             is_correct: isCorrect,
-            score: isCorrect ? activeQuestion.points ?? 1 : 0,
+            score,
             response_time: responseTime,
           })
           .select()
@@ -205,13 +340,14 @@ export function StudentJoin() {
 
         if (insertErr) throw insertErr
         setSubmittedAnswer(data as AnswerRow)
+        refreshGameStatus()
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not submit your answer.")
       } finally {
         setAnswerSubmitting(false)
       }
     },
-    [participant, activeQuestion, submittedAnswer, answerSubmitting],
+    [participant, activeQuestion, submittedAnswer, answerSubmitting, timeExpired, refreshGameStatus],
   )
 
   const configured = isSupabaseConfigured
@@ -233,9 +369,45 @@ export function StudentJoin() {
   setPdfUrl(data?.file_url ?? null)
 }, [])
 useEffect(() => {
-  if (!session?.presentation_id) return
-  refreshPdfUrl(session.presentation_id)
+  const presentationId = session?.presentation_id
+  if (!presentationId) return
+
+  const supabase = getSupabaseClient()
+  if (!supabase) return
+
+  // Load immediately, then keep watching in case the teacher uploads/replaces
+  // the PDF after students have already joined the room.
+  refreshPdfUrl(presentationId)
+
+  const channel = supabase
+    .channel(`student-presentation-file:${presentationId}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "presentations",
+        filter: `id=eq.${presentationId}`,
+      },
+      (payload) => {
+        const nextUrl = (payload.new as { file_url?: string | null })?.file_url ?? null
+        setPdfUrl(nextUrl)
+        if (!nextUrl) refreshPdfUrl(presentationId)
+      },
+    )
+    .subscribe()
+
+  // Polling fallback in case Realtime replication is not enabled.
+  const timer = window.setInterval(() => {
+    refreshPdfUrl(presentationId)
+  }, 2000)
+
+  return () => {
+    supabase.removeChannel(channel)
+    window.clearInterval(timer)
+  }
 }, [session?.presentation_id, refreshPdfUrl])
+
   const handleJoin = useCallback(
     async (event: React.FormEvent) => {
       event.preventDefault()
@@ -375,6 +547,32 @@ useEffect(() => {
           </span>
         </div>
 
+        <div className="mx-auto mb-3 grid w-full max-w-5xl grid-cols-2 gap-2 sm:gap-3">
+          <div className="rounded-xl border border-border bg-card px-2 py-2.5 text-center shadow-sm sm:px-4">
+            <div className="flex items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <Star className="size-3.5 text-amber-500" aria-hidden="true" />
+              Total score
+            </div>
+            <p className="mt-1 text-lg font-bold tabular-nums text-primary sm:text-xl">
+              {totalScore}
+            </p>
+            <p className="text-[10px] text-muted-foreground sm:text-xs">points</p>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card px-2 py-2.5 text-center shadow-sm sm:px-4">
+            <div className="flex items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <Flame className="size-3.5 text-orange-500" aria-hidden="true" />
+              Streak
+            </div>
+            <p className="mt-1 text-lg font-bold tabular-nums text-primary sm:text-xl">
+              {currentStreak}
+            </p>
+            <p className="text-[10px] text-muted-foreground sm:text-xs">
+              correct in a row
+            </p>
+          </div>
+        </div>
+
         {activeQuestion && (
           <section className="mx-auto mb-4 w-full max-w-5xl rounded-2xl border border-primary/20 bg-card p-4 text-left shadow-lg sm:p-6">
             <div className="flex items-start justify-between gap-4">
@@ -386,9 +584,55 @@ useEffect(() => {
                   {activeQuestion.question}
                 </h2>
               </div>
-              <span className="shrink-0 rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-foreground">
-                {activeQuestion.points ?? 1} point{(activeQuestion.points ?? 1) === 1 ? "" : "s"}
-              </span>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold tabular-nums ${
+                    timeExpired && !submittedAnswer
+                      ? "bg-destructive/10 text-destructive"
+                      : timeRemaining <= 5 && !submittedAnswer
+                        ? "bg-amber-100 text-amber-900"
+                        : "bg-primary text-primary-foreground"
+                  }`}
+                >
+                  <Clock3 className="size-3.5" aria-hidden="true" />
+                  {submittedAnswer
+                    ? `${submittedAnswer.response_time ?? 0}s`
+                    : `${timeRemaining}s`}
+                </span>
+
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-foreground">
+                  <Zap className="size-3.5" aria-hidden="true" />
+                  {(activeQuestion.points ?? 1) + (activeQuestion.speed_bonus ?? 0)} max
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <div className="mb-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>
+                  🎯 Base {activeQuestion.points ?? 1} + ⚡ up to {activeQuestion.speed_bonus ?? 0} bonus
+                </span>
+                {!submittedAnswer && (
+                  <span className={timeRemaining <= 5 ? "font-semibold text-amber-700" : ""}>
+                    Answer faster for more points
+                  </span>
+                )}
+              </div>
+
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full bg-primary transition-[width] duration-200"
+                  style={{
+                    width: `${Math.max(
+                      0,
+                      Math.min(
+                        100,
+                        (timeRemaining / Math.max(5, activeQuestion.time_limit ?? 15)) * 100,
+                      ),
+                    )}%`,
+                  }}
+                />
+              </div>
             </div>
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -402,13 +646,13 @@ useEffect(() => {
                     <button
                       key={choice.key}
                       type="button"
-                      disabled={submitted || answerSubmitting}
+                      disabled={submitted || answerSubmitting || timeExpired}
                       onClick={() => submitAnswer(choice.key)}
                       className={`flex min-h-16 items-center gap-3 rounded-xl border px-4 py-3 text-left transition ${
                         chosen
                           ? "border-primary bg-primary/10 ring-2 ring-primary/20"
                           : "border-border bg-background hover:border-primary/40"
-                      } disabled:cursor-default`}
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
                       <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary font-bold text-primary-foreground">
                         {choice.key}
@@ -418,6 +662,12 @@ useEffect(() => {
                   )
                 })}
             </div>
+
+            {timeExpired && !submittedAnswer && (
+              <div className="mt-4 rounded-xl bg-destructive/10 px-4 py-3 text-sm font-semibold text-destructive">
+                ⏰ Time&apos;s up! This question is now locked.
+              </div>
+            )}
 
             {answerSubmitting && (
               <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
@@ -435,8 +685,8 @@ useEffect(() => {
                 }`}
               >
                 {submittedAnswer.is_correct
-                  ? `Correct! +${submittedAnswer.score} point${submittedAnswer.score === 1 ? "" : "s"}`
-                  : "Answer submitted."}
+                  ? `Correct! +${submittedAnswer.score} point${submittedAnswer.score === 1 ? "" : "s"} · answered in ${submittedAnswer.response_time ?? 0}s`
+                  : `Answer submitted in ${submittedAnswer.response_time ?? 0}s.`}
               </div>
             )}
           </section>
