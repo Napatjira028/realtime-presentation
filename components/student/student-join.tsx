@@ -144,33 +144,54 @@ useEffect(() => {
   // ---- Live presentation view -------------------------------------------
   if (session && participant && session.status === "active") {
     return (
-      <div className="mx-auto w-full max-w-2xl rounded-2xl border border-border bg-card p-8 text-center">
-        <span className="mx-auto flex size-12 items-center justify-center rounded-full bg-primary">
-          <Radio className="size-6 text-primary-foreground" aria-hidden="true" />
-        </span>
-        <span className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground">
-          <Radio className="size-3.5" aria-hidden="true" />
-          Live now
-        </span>
-        <h2 className="mt-4 text-2xl font-bold tracking-tight text-balance">The presentation has started</h2>
-        <p className="mt-2 text-sm text-muted-foreground text-pretty">
-          {participant.name}, you&apos;re following slide {session.current_slide}. Questions from your teacher
-          will appear here in real time.
-        </p>
-        <div className="mt-6">
-  {pdfUrl ? (
-    <PdfStage
-      fileUrl={pdfUrl}
-      pageNumber={session.current_slide ?? 1}
-    />
-  ) : (
-    <div className="rounded-xl border border-dashed border-border bg-muted/40 p-6">
-      <p className="text-sm text-muted-foreground">
-        Loading presentation...
-      </p>
-    </div>
-  )}
-</div>
+      <div className="relative left-1/2 w-[calc(100vw-1rem)] -translate-x-1/2 px-2 pb-3 text-center sm:w-[calc(100vw-2rem)] sm:px-3">
+        <div className="mx-auto mb-3 flex w-full max-w-6xl items-center justify-between gap-3 rounded-xl border border-border bg-card/95 px-3 py-2 shadow-sm backdrop-blur sm:px-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary">
+              <Radio className="size-4 text-primary-foreground" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 text-left">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground">
+                  <Radio className="size-3" aria-hidden="true" />
+                  Live
+                </span>
+                <span className="text-sm font-semibold">
+                  Slide {session.current_slide ?? 1}
+                </span>
+              </div>
+              <p className="truncate text-xs text-muted-foreground sm:text-sm">
+                {participant.name}, follow the teacher&apos;s presentation.
+              </p>
+            </div>
+          </div>
+
+          <span className="hidden text-xs text-muted-foreground sm:block">
+            Updates automatically
+          </span>
+        </div>
+
+        {pdfUrl ? (
+          <div
+            className="mx-auto"
+            style={{ width: "min(96vw, 145.78vh)" }}
+          >
+            <PdfStage
+              fileUrl={pdfUrl}
+              pageNumber={session.current_slide ?? 1}
+              className="rounded-xl shadow-lg"
+            />
+          </div>
+        ) : (
+          <div className="mx-auto flex min-h-[60vh] w-[min(96vw,145.78vh)] items-center justify-center rounded-xl border border-dashed border-border bg-muted/40 p-6">
+            <div>
+              <Loader2 className="mx-auto size-7 animate-spin text-muted-foreground" aria-hidden="true" />
+              <p className="mt-3 text-sm text-muted-foreground">
+                Loading presentation...
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
