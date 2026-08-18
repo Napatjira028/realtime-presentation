@@ -18,14 +18,24 @@ interface PdfStageProps {
   fileUrl: string | null
   pageNumber: number
   onNumPages?: (numPages: number) => void
+  /** Optional extra classes for the outer presentation stage. */
+  className?: string
   /** Shown when no file has been uploaded yet. */
   emptyState?: ReactNode
 }
 
-/** A 16:9 presentation stage that renders the current PDF page, or an empty state. */
-export function PdfStage({ fileUrl, pageNumber, onNumPages, emptyState }: PdfStageProps) {
+/** A responsive 16:9 presentation stage that renders the current PDF page, or an empty state. */
+export function PdfStage({
+  fileUrl,
+  pageNumber,
+  onNumPages,
+  className = "",
+  emptyState,
+}: PdfStageProps) {
   return (
-    <div className="aspect-video w-full overflow-hidden rounded-xl border border-border bg-foreground shadow-sm">
+    <div
+      className={`aspect-video w-full overflow-hidden rounded-xl border border-border bg-foreground shadow-sm ${className}`}
+    >
       {fileUrl ? (
         <PdfViewer
           fileUrl={fileUrl}
