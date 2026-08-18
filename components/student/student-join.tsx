@@ -93,6 +93,7 @@ useEffect(() => {
         if (pErr) throw pErr
 
         setSession(foundSession)
+        await refreshPdfUrl(foundSession.presentation_id)
         setParticipant(inserted as Participant)
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to join the session.")
