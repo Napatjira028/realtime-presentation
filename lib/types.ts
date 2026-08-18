@@ -12,6 +12,10 @@ export interface Session {
   room_code: string
   current_slide: number
   status: SessionStatus
+
+  // Teacher controls when students are allowed to see final ranking.
+  reveal_results: boolean
+
   file_url: string | null
   file_path: string | null
   total_slides: number

@@ -320,8 +320,11 @@ export function StudentJoin() {
         // Bonus falls gradually from the configured maximum down to zero.
         // A correct answer is always required before any bonus is awarded.
         const speedRatio = Math.max(0, (timeLimit - responseTime) / timeLimit)
+        // Use Math.ceil so very fast correct answers can receive the full configured
+        // speed bonus. Example: 15s limit, base 1, max bonus 5, answer in 2s
+        // => speedRatio 13/15, bonus ceil(5 * 13/15) = 5, total score = 6.
         const earnedSpeedBonus = isCorrect
-          ? Math.max(0, Math.round(maxSpeedBonus * speedRatio))
+          ? Math.max(0, Math.ceil(maxSpeedBonus * speedRatio))
           : 0
         const score = isCorrect ? basePoints + earnedSpeedBonus : 0
 

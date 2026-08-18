@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Check, Copy, Loader2, Play, PlusCircle, Radio, Save, Trash2 } from "lucide-react"
+import { Check, Copy, Loader2, Play, PlusCircle, Radio, Save, Square, Trophy, Trash2, Eye } from "lucide-react"
 import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase/client"
 import { generateRoomCode } from "@/lib/room"
 import type { Participant, Session } from "@/lib/types"
@@ -35,6 +35,16 @@ type AnswerRow = {
   created_at?: string
 }
 
+type FinalLeaderboardRow = {
+  participantId: number
+  name: string
+  studentNumber: string | null
+  score: number
+  correctAnswers: number
+  answeredQuestions: number
+  rank: number
+}
+
 const MAX_CODE_ATTEMPTS = 5
 
 export function TeacherDashboard() {
@@ -62,6 +72,9 @@ export function TeacherDashboard() {
   const [speedBonus, setSpeedBonus] = useState(5)
   const [savingQuestion, setSavingQuestion] = useState(false)
   const [questionAnswers, setQuestionAnswers] = useState<AnswerRow[]>([])
+  const [ending, setEnding] = useState(false)
+  const [revealingResults, setRevealingResults] = useState(false)
+  const [finalLeaderboard, setFinalLeaderboard] = useState<FinalLeaderboardRow[]>([])
 
   const configured = isSupabaseConfigured
 
@@ -98,6 +111,7 @@ export function TeacherDashboard() {
               room_code: code,
               status: "waiting",
               current_slide: 1,
+              reveal_results: false,
             })
             .select()
             .single()
@@ -251,6 +265,192 @@ const uploadPdf = useCallback(async (file: File) => {
       setError(err instanceof Error ? err.message : "Failed to start presentation.")
     } finally {
       setStarting(false)
+    }
+  }, [session])
+
+  const refreshFinalLeaderboard = useCallback(async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase || !session?.id) {
+      setFinalLeaderboard([])
+      return
+    }
+
+    const { data: sessionParticipants, error: participantsErr } = await supabase
+      .from("participants")
+      .select("*")
+      .eq("session_id", session.id)
+      .order("created_at", { ascending: true })
+
+    if (participantsErr) {
+      console.error("Failed to load final leaderboard participants:", participantsErr)
+      return
+    }
+
+    const currentParticipants = (sessionParticipants as Participant[]) ?? []
+    if (currentParticipants.length === 0) {
+      setFinalLeaderboard([])
+      return
+    }
+
+    const participantIds = currentParticipants.map((item) => item.id)
+
+    const { data: allAnswers, error: answersErr } = await supabase
+      .from("answers")
+      .select("participant_id, score, is_correct")
+      .in("participant_id", participantIds)
+
+    if (answersErr) {
+      console.error("Failed to load final leaderboard answers:", answersErr)
+      return
+    }
+
+    const totals = new Map<
+      number,
+      { score: number; correctAnswers: number; answeredQuestions: number }
+    >()
+
+    for (const participantItem of currentParticipants) {
+      totals.set(participantItem.id, {
+        score: 0,
+        correctAnswers: 0,
+        answeredQuestions: 0,
+      })
+    }
+
+    for (const answer of (allAnswers ?? []) as Array<{
+      participant_id: number
+      score: number | null
+      is_correct: boolean | null
+    }>) {
+      const current = totals.get(answer.participant_id)
+      if (!current) continue
+
+      current.score += Number(answer.score ?? 0)
+      current.answeredQuestions += 1
+      if (answer.is_correct) current.correctAnswers += 1
+    }
+
+    const sorted = currentParticipants
+      .map((participantItem) => {
+        const total = totals.get(participantItem.id) ?? {
+          score: 0,
+          correctAnswers: 0,
+          answeredQuestions: 0,
+        }
+
+        return {
+          participantId: participantItem.id,
+          name: participantItem.name,
+          studentNumber: participantItem.student_number ?? null,
+          score: total.score,
+          correctAnswers: total.correctAnswers,
+          answeredQuestions: total.answeredQuestions,
+          rank: 0,
+        }
+      })
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        if (b.correctAnswers !== a.correctAnswers) return b.correctAnswers - a.correctAnswers
+        return a.name.localeCompare(b.name, "th")
+      })
+      .map((row, index, rows) => {
+        const previous = rows[index - 1]
+        const sameAsPrevious =
+          previous &&
+          previous.score === row.score &&
+          previous.correctAnswers === row.correctAnswers
+
+        return {
+          ...row,
+          rank: sameAsPrevious ? previous.rank : index + 1,
+        }
+      })
+
+    setFinalLeaderboard(sorted)
+  }, [session?.id])
+
+  useEffect(() => {
+    if (!session?.id) return
+
+    refreshFinalLeaderboard()
+
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+
+    const channel = supabase
+      .channel(`teacher-final-leaderboard:${session.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "answers" },
+        () => refreshFinalLeaderboard(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "participants", filter: `session_id=eq.${session.id}` },
+        () => refreshFinalLeaderboard(),
+      )
+      .subscribe()
+
+    const timer = window.setInterval(refreshFinalLeaderboard, 2500)
+
+    return () => {
+      supabase.removeChannel(channel)
+      window.clearInterval(timer)
+    }
+  }, [session?.id, refreshFinalLeaderboard])
+
+  const endPresentation = useCallback(async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase || !session || session.status !== "active") return
+
+    const confirmed = window.confirm(
+      "End this presentation? Students will no longer be able to answer questions.",
+    )
+    if (!confirmed) return
+
+    setEnding(true)
+    setError(null)
+
+    try {
+      const { data, error: endErr } = await supabase
+        .from("sessions")
+        .update({ status: "ended", reveal_results: false })
+        .eq("id", session.id)
+        .select()
+        .single()
+
+      if (endErr) throw endErr
+
+      setSession(data as Session)
+      await refreshFinalLeaderboard()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to end presentation.")
+    } finally {
+      setEnding(false)
+    }
+  }, [session, refreshFinalLeaderboard])
+
+  const revealResultsToStudents = useCallback(async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase || !session || session.status !== "ended") return
+
+    setRevealingResults(true)
+    setError(null)
+
+    try {
+      const { data, error: revealErr } = await supabase
+        .from("sessions")
+        .update({ reveal_results: true })
+        .eq("id", session.id)
+        .select()
+        .single()
+
+      if (revealErr) throw revealErr
+      setSession(data as Session)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reveal results.")
+    } finally {
+      setRevealingResults(false)
     }
   }, [session])
 
@@ -515,6 +715,7 @@ const uploadPdf = useCallback(async (file: File) => {
 
   // ---- Active-room view -------------------------------------------------
   const isActive = session.status === "active"
+  const isEnded = session.status === "ended"
 
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-6 md:grid-cols-2">
@@ -599,6 +800,23 @@ const uploadPdf = useCallback(async (file: File) => {
           )}
           {isActive ? "Presentation started" : starting ? "Starting…" : "Start presentation"}
         </button>
+
+        {isActive && (
+          <button
+            type="button"
+            onClick={endPresentation}
+            disabled={ending}
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-60"
+          >
+            {ending ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <Square className="size-4" aria-hidden="true" />
+            )}
+            {ending ? "Ending..." : "End presentation"}
+          </button>
+        )}
+
         {pdfUrl && (
   <div className="mt-6">
     <PdfStage
@@ -808,8 +1026,92 @@ const uploadPdf = useCallback(async (file: File) => {
 )}
       </section>
 
-      {/* Participants */}
-      <ParticipantList participants={participants} />
+      {/* Participants / final results */}
+      {isEnded ? (
+        <section className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                <Trophy className="size-5" aria-hidden="true" />
+              </span>
+              <div>
+                <h2 className="text-base font-semibold">Final leaderboard</h2>
+                <p className="text-xs text-muted-foreground">
+                  Students cannot see their ranking until you reveal the results.
+                </p>
+              </div>
+            </div>
+            <span className="rounded-full bg-primary px-2.5 py-1 text-xs font-semibold text-primary-foreground">
+              {finalLeaderboard.length}
+            </span>
+          </div>
+
+          <div className="mt-4">
+            {session.reveal_results ? (
+              <div className="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+                Results are visible to students.
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={revealResultsToStudents}
+                disabled={revealingResults || finalLeaderboard.length === 0}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+              >
+                {revealingResults ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Eye className="size-4" aria-hidden="true" />
+                )}
+                {revealingResults ? "Revealing..." : "Reveal results to students"}
+              </button>
+            )}
+          </div>
+
+          {finalLeaderboard.length === 0 ? (
+            <p className="mt-4 text-sm text-muted-foreground">No student scores yet.</p>
+          ) : (
+            <div className="mt-4 space-y-2">
+              {finalLeaderboard.map((row) => {
+                const medal =
+                  row.rank === 1 ? "🥇" : row.rank === 2 ? "🥈" : row.rank === 3 ? "🥉" : null
+
+                return (
+                  <div
+                    key={row.participantId}
+                    className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-3 ${
+                      row.rank <= 3
+                        ? "border-primary/20 bg-primary/5"
+                        : "border-border bg-background"
+                    }`}
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-bold text-accent-foreground">
+                        {medal ?? row.rank}
+                      </div>
+
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{row.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {row.studentNumber ? `#${row.studentNumber} · ` : ""}
+                          {row.correctAnswers} correct · {row.answeredQuestions} answered
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 text-right">
+                      <p className="text-lg font-bold tabular-nums text-primary">{row.score}</p>
+                      <p className="text-[11px] text-muted-foreground">points</p>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      ) : (
+        <ParticipantList participants={participants} />
+      )}
     </div>
   )
 }
