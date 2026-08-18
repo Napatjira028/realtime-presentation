@@ -7,19 +7,27 @@ import type { Participant, Session } from "@/lib/types"
 import { ConfigNotice } from "@/components/config-notice"
 import { PdfStage } from "@/components/presentation/pdf-stage"
 
+type MatchingPair = {
+  id: string
+  left: string
+  right: string
+}
+
 type QuestionRow = {
   id: number
   presentation_id: number
   slide_number: number
   question: string
-  choice_a: string
-  choice_b: string
+  choice_a: string | null
+  choice_b: string | null
   choice_c: string | null
   choice_d: string | null
-  correct_answer: string
+  correct_answer: string | null
   points: number
   time_limit: number | null
   speed_bonus: number | null
+  question_type: "multiple_choice" | "matching" | string
+  matching_pairs: MatchingPair[] | null
 }
 
 type AnswerRow = {
@@ -67,6 +75,37 @@ function correctChoiceKey(question: QuestionRow) {
   return values.find(([, value]) => normalizeAnswer(value) === raw)?.[0] ?? null
 }
 
+
+function getMatchingPairs(question: QuestionRow | null): MatchingPair[] {
+  if (!question || question.question_type !== "matching") return []
+  return Array.isArray(question.matching_pairs)
+    ? question.matching_pairs.filter(
+        (pair): pair is MatchingPair =>
+          Boolean(pair) &&
+          typeof pair.id === "string" &&
+          typeof pair.left === "string" &&
+          typeof pair.right === "string",
+      )
+    : []
+}
+
+function matchingRightItems(pairs: MatchingPair[]) {
+  if (pairs.length <= 1) return pairs
+  return [...pairs.slice(1), pairs[0]]
+}
+
+function parseMatchingAnswer(answer: string | null | undefined): Record<string, string> {
+  if (!answer) return {}
+  try {
+    const parsed = JSON.parse(answer)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+
 export function StudentJoin() {
   const [roomCode, setRoomCode] = useState("")
   const [name, setName] = useState("")
@@ -82,6 +121,8 @@ export function StudentJoin() {
   const [activeQuestion, setActiveQuestion] = useState<QuestionRow | null>(null)
   const [questionLoading, setQuestionLoading] = useState(false)
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null)
+  const [matchingSelections, setMatchingSelections] = useState<Record<string, string>>({})
+  const [selectedMatchingLeft, setSelectedMatchingLeft] = useState<string | null>(null)
   const [submittedAnswer, setSubmittedAnswer] = useState<AnswerRow | null>(null)
   const [answerSubmitting, setAnswerSubmitting] = useState(false)
   const [timeRemaining, setTimeRemaining] = useState(15)
@@ -120,6 +161,8 @@ export function StudentJoin() {
       if (current?.id !== nextQuestion?.id) {
         const nextLimit = Math.max(5, nextQuestion?.time_limit ?? 15)
         setSelectedAnswer(null)
+        setMatchingSelections({})
+        setSelectedMatchingLeft(null)
         setSubmittedAnswer(null)
         setTimeRemaining(nextLimit)
         setTimeExpired(false)
@@ -137,8 +180,17 @@ export function StudentJoin() {
         .maybeSingle()
 
       if (existing) {
-        setSubmittedAnswer(existing as AnswerRow)
-        setSelectedAnswer((existing as AnswerRow).answer)
+        const existingAnswer = existing as AnswerRow
+        setSubmittedAnswer(existingAnswer)
+        if (nextQuestion.question_type === "matching") {
+          setMatchingSelections(parseMatchingAnswer(existingAnswer.answer))
+          setSelectedMatchingLeft(null)
+          setSelectedAnswer(null)
+        } else {
+          setSelectedAnswer(existingAnswer.answer)
+          setMatchingSelections({})
+          setSelectedMatchingLeft(null)
+        }
       }
     }
 
@@ -499,6 +551,162 @@ export function StudentJoin() {
     [participant, activeQuestion, submittedAnswer, answerSubmitting, timeExpired, refreshGameStatus],
   )
 
+  const selectMatchingLeft = useCallback(
+    (leftId: string) => {
+      if (submittedAnswer || answerSubmitting || timeExpired) return
+      setSelectedMatchingLeft((current) => (current === leftId ? null : leftId))
+    },
+    [submittedAnswer, answerSubmitting, timeExpired],
+  )
+
+  const selectMatchingRight = useCallback(
+    (rightId: string) => {
+      if (
+        !selectedMatchingLeft ||
+        submittedAnswer ||
+        answerSubmitting ||
+        timeExpired
+      ) {
+        return
+      }
+
+      setMatchingSelections((current) => {
+        const next = { ...current }
+
+        for (const [leftId, selectedRightId] of Object.entries(next)) {
+          if (selectedRightId === rightId && leftId !== selectedMatchingLeft) {
+            delete next[leftId]
+          }
+        }
+
+        next[selectedMatchingLeft] = rightId
+        return next
+      })
+      setSelectedMatchingLeft(null)
+    },
+    [
+      selectedMatchingLeft,
+      submittedAnswer,
+      answerSubmitting,
+      timeExpired,
+    ],
+  )
+
+  const submitMatchingAnswer = useCallback(async () => {
+    const supabase = getSupabaseClient()
+    if (
+      !supabase ||
+      !participant ||
+      !activeQuestion ||
+      activeQuestion.question_type !== "matching" ||
+      submittedAnswer ||
+      answerSubmitting ||
+      timeExpired
+    ) {
+      return
+    }
+
+    const pairs = getMatchingPairs(activeQuestion)
+    if (pairs.length === 0) {
+      setError("This matching question has no pairs.")
+      return
+    }
+
+    if (Object.keys(matchingSelections).length !== pairs.length) {
+      setError("Please match every item before submitting.")
+      return
+    }
+
+    const timeLimit = Math.max(5, activeQuestion.time_limit ?? 15)
+    const responseTime = Math.max(
+      0,
+      Math.floor((Date.now() - questionStartedAtRef.current) / 1000),
+    )
+
+    if (responseTime >= timeLimit) {
+      setTimeRemaining(0)
+      setTimeExpired(true)
+      return
+    }
+
+    setAnswerSubmitting(true)
+    setError(null)
+
+    try {
+      const { data: existing, error: existingErr } = await supabase
+        .from("answers")
+        .select("*")
+        .eq("participant_id", participant.id)
+        .eq("question_id", activeQuestion.id)
+        .maybeSingle()
+
+      if (existingErr) throw existingErr
+
+      if (existing) {
+        const existingAnswer = existing as AnswerRow
+        setSubmittedAnswer(existingAnswer)
+        setMatchingSelections(parseMatchingAnswer(existingAnswer.answer))
+        return
+      }
+
+      const correctCount = pairs.reduce(
+        (count, pair) =>
+          count + (matchingSelections[pair.id] === pair.id ? 1 : 0),
+        0,
+      )
+      const isCorrect = correctCount === pairs.length
+
+      const basePoints = Math.max(1, activeQuestion.points ?? pairs.length)
+      const maxSpeedBonus = Math.max(0, activeQuestion.speed_bonus ?? 0)
+      const earnedBasePoints =
+        correctCount === 0
+          ? 0
+          : Math.max(
+              1,
+              Math.round((basePoints * correctCount) / pairs.length),
+            )
+
+      const speedRatio = Math.max(0, (timeLimit - responseTime) / timeLimit)
+      const earnedSpeedBonus = isCorrect
+        ? Math.max(0, Math.ceil(maxSpeedBonus * speedRatio))
+        : 0
+      const score = earnedBasePoints + earnedSpeedBonus
+
+      const { data, error: insertErr } = await supabase
+        .from("answers")
+        .insert({
+          participant_id: participant.id,
+          question_id: activeQuestion.id,
+          answer: JSON.stringify(matchingSelections),
+          is_correct: isCorrect,
+          score,
+          response_time: responseTime,
+        })
+        .select()
+        .single()
+
+      if (insertErr) throw insertErr
+      setSubmittedAnswer(data as AnswerRow)
+      refreshGameStatus()
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not submit your matching answer.",
+      )
+    } finally {
+      setAnswerSubmitting(false)
+    }
+  }, [
+    participant,
+    activeQuestion,
+    matchingSelections,
+    submittedAnswer,
+    answerSubmitting,
+    timeExpired,
+    refreshGameStatus,
+  ])
+
   const configured = isSupabaseConfigured
   const refreshPdfUrl = useCallback(async (presentationId: number) => {
   const supabase = getSupabaseClient()
@@ -668,6 +876,12 @@ useEffect(() => {
         ]
       : []
 
+    const matchingPairs = getMatchingPairs(activeQuestion)
+    const matchingRight = matchingRightItems(matchingPairs)
+    const matchingComplete =
+      matchingPairs.length > 0 &&
+      Object.keys(matchingSelections).length === matchingPairs.length
+
     return (
       <div className="relative left-1/2 w-[calc(100vw-1rem)] -translate-x-1/2 px-2 pb-3 text-center sm:w-[calc(100vw-2rem)] sm:px-3">
         <div className="mx-auto mb-3 flex w-full max-w-6xl items-center justify-between gap-3 rounded-xl border border-border bg-card/95 px-3 py-2 shadow-sm backdrop-blur sm:px-4">
@@ -784,33 +998,176 @@ useEffect(() => {
               </div>
             </div>
 
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              {choices
-                .filter((choice) => Boolean(choice.text))
-                .map((choice) => {
-                  const chosen = selectedAnswer === choice.key
-                  const submitted = Boolean(submittedAnswer)
+            {activeQuestion.question_type === "matching" ? (
+              <div className="mt-5">
+                <div className="mb-3 rounded-xl bg-primary/5 px-4 py-3 text-sm text-primary">
+                  🧩 เลือกข้อความฝั่งซ้าย แล้วเลือกคำตอบฝั่งขวาเพื่อโยงเส้นให้ครบทุกคู่
+                </div>
 
-                  return (
+                <div className="relative overflow-hidden rounded-2xl border border-border bg-background p-3 sm:p-4">
+                  <svg
+                    className="pointer-events-none absolute inset-0 z-0 h-full w-full"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                  >
+                    {matchingPairs.map((pair, leftIndex) => {
+                      const rightId = matchingSelections[pair.id]
+                      if (!rightId) return null
+
+                      const rightIndex = matchingRight.findIndex(
+                        (rightPair) => rightPair.id === rightId,
+                      )
+                      if (rightIndex < 0) return null
+
+                      const count = Math.max(1, matchingPairs.length)
+                      const y1 = ((leftIndex + 0.5) / count) * 100
+                      const y2 = ((rightIndex + 0.5) / count) * 100
+
+                      return (
+                        <path
+                          key={`${pair.id}-${rightId}`}
+                          d={`M 44 ${y1} C 48 ${y1}, 52 ${y2}, 56 ${y2}`}
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="0.9"
+                          className="text-primary"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      )
+                    })}
+                  </svg>
+
+                  <div className="relative z-10 grid grid-cols-[1fr_42px_1fr] gap-2 sm:grid-cols-[1fr_64px_1fr] sm:gap-3">
+                    <div className="grid gap-3">
+                      {matchingPairs.map((pair) => {
+                        const isSelected = selectedMatchingLeft === pair.id
+                        const hasConnection = Boolean(matchingSelections[pair.id])
+
+                        return (
+                          <button
+                            key={pair.id}
+                            type="button"
+                            disabled={Boolean(submittedAnswer) || answerSubmitting || timeExpired}
+                            onClick={() => selectMatchingLeft(pair.id)}
+                            className={`relative flex min-h-16 items-center justify-between rounded-xl border px-3 py-3 text-left transition sm:px-4 ${
+                              isSelected
+                                ? "border-primary bg-primary/10 ring-2 ring-primary/20"
+                                : hasConnection
+                                  ? "border-primary/50 bg-primary/5"
+                                  : "border-border bg-card hover:border-primary/40"
+                            } disabled:cursor-not-allowed disabled:opacity-60`}
+                          >
+                            <span className="pr-3 text-sm font-medium sm:text-base">
+                              {pair.left}
+                            </span>
+                            <span
+                              className={`size-4 shrink-0 rounded-full border-2 ${
+                                isSelected || hasConnection
+                                  ? "border-primary bg-primary"
+                                  : "border-muted-foreground/40 bg-background"
+                              }`}
+                            />
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    <div />
+
+                    <div className="grid gap-3">
+                      {matchingRight.map((pair) => {
+                        const isUsed = Object.values(matchingSelections).includes(pair.id)
+                        const waitingForRight = Boolean(selectedMatchingLeft)
+
+                        return (
+                          <button
+                            key={pair.id}
+                            type="button"
+                            disabled={
+                              Boolean(submittedAnswer) ||
+                              answerSubmitting ||
+                              timeExpired ||
+                              !waitingForRight
+                            }
+                            onClick={() => selectMatchingRight(pair.id)}
+                            className={`relative flex min-h-16 items-center gap-3 rounded-xl border px-3 py-3 text-left transition sm:px-4 ${
+                              isUsed
+                                ? "border-primary/50 bg-primary/5"
+                                : waitingForRight
+                                  ? "border-border bg-card hover:border-primary/50 hover:bg-primary/5"
+                                  : "border-border bg-card"
+                            } disabled:cursor-not-allowed disabled:opacity-60`}
+                          >
+                            <span
+                              className={`size-4 shrink-0 rounded-full border-2 ${
+                                isUsed
+                                  ? "border-primary bg-primary"
+                                  : "border-muted-foreground/40 bg-background"
+                              }`}
+                            />
+                            <span className="text-sm font-medium sm:text-base">
+                              {pair.right}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {!submittedAnswer && !timeExpired && (
+                  <div className="mt-4 flex flex-col items-center justify-between gap-3 rounded-xl border border-border bg-muted/30 px-4 py-3 sm:flex-row">
+                    <p className="text-sm text-muted-foreground">
+                      จับคู่แล้ว {Object.keys(matchingSelections).length}/{matchingPairs.length} คู่
+                    </p>
                     <button
-                      key={choice.key}
                       type="button"
-                      disabled={submitted || answerSubmitting || timeExpired}
-                      onClick={() => submitAnswer(choice.key)}
-                      className={`flex min-h-16 items-center gap-3 rounded-xl border px-4 py-3 text-left transition ${
-                        chosen
-                          ? "border-primary bg-primary/10 ring-2 ring-primary/20"
-                          : "border-border bg-background hover:border-primary/40"
-                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                      disabled={!matchingComplete || answerSubmitting}
+                      onClick={submitMatchingAnswer}
+                      className="inline-flex min-w-40 items-center justify-center rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary font-bold text-primary-foreground">
-                        {choice.key}
-                      </span>
-                      <span className="text-sm font-medium sm:text-base">{choice.text}</span>
+                      {answerSubmitting ? (
+                        <>
+                          <Loader2 className="mr-2 size-4 animate-spin" aria-hidden="true" />
+                          กำลังส่ง...
+                        </>
+                      ) : (
+                        "ส่งคำตอบ"
+                      )}
                     </button>
-                  )
-                })}
-            </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                {choices
+                  .filter((choice) => Boolean(choice.text))
+                  .map((choice) => {
+                    const chosen = selectedAnswer === choice.key
+                    const submitted = Boolean(submittedAnswer)
+
+                    return (
+                      <button
+                        key={choice.key}
+                        type="button"
+                        disabled={submitted || answerSubmitting || timeExpired}
+                        onClick={() => submitAnswer(choice.key)}
+                        className={`flex min-h-16 items-center gap-3 rounded-xl border px-4 py-3 text-left transition ${
+                          chosen
+                            ? "border-primary bg-primary/10 ring-2 ring-primary/20"
+                            : "border-border bg-background hover:border-primary/40"
+                        } disabled:cursor-not-allowed disabled:opacity-60`}
+                      >
+                        <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary font-bold text-primary-foreground">
+                          {choice.key}
+                        </span>
+                        <span className="text-sm font-medium sm:text-base">{choice.text}</span>
+                      </button>
+                    )
+                  })}
+              </div>
+            )}
 
             {timeExpired && !submittedAnswer && (
               <div className="mt-4 rounded-xl bg-destructive/10 px-4 py-3 text-sm font-semibold text-destructive">
