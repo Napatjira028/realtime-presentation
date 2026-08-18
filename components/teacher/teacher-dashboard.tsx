@@ -20,6 +20,8 @@ type QuestionRow = {
   choice_d: string | null
   correct_answer: string
   points: number
+  time_limit: number | null
+  speed_bonus: number | null
 }
 
 type AnswerRow = {
@@ -56,6 +58,8 @@ export function TeacherDashboard() {
   const [choiceD, setChoiceD] = useState("")
   const [correctAnswer, setCorrectAnswer] = useState<"A" | "B" | "C" | "D">("A")
   const [questionPoints, setQuestionPoints] = useState(1)
+  const [timeLimit, setTimeLimit] = useState(15)
+  const [speedBonus, setSpeedBonus] = useState(5)
   const [savingQuestion, setSavingQuestion] = useState(false)
   const [questionAnswers, setQuestionAnswers] = useState<AnswerRow[]>([])
 
@@ -366,6 +370,8 @@ const uploadPdf = useCallback(async (file: File) => {
         normalized === "B" || normalized === "C" || normalized === "D" ? normalized : "A",
       )
       setQuestionPoints(currentQuestion.points ?? 1)
+      setTimeLimit(currentQuestion.time_limit ?? 15)
+      setSpeedBonus(currentQuestion.speed_bonus ?? 5)
     } else {
       setQuestionText("")
       setChoiceA("")
@@ -374,6 +380,8 @@ const uploadPdf = useCallback(async (file: File) => {
       setChoiceD("")
       setCorrectAnswer("A")
       setQuestionPoints(1)
+      setTimeLimit(15)
+      setSpeedBonus(5)
     }
   }, [currentQuestion?.id, session?.current_slide])
 
@@ -400,6 +408,8 @@ const uploadPdf = useCallback(async (file: File) => {
         choice_d: choiceD.trim() || null,
         correct_answer: correctAnswer,
         points: Math.max(1, Number(questionPoints) || 1),
+        time_limit: Math.max(5, Number(timeLimit) || 15),
+        speed_bonus: Math.max(0, Number(speedBonus) || 0),
       }
 
       if (currentQuestion) {
@@ -437,6 +447,8 @@ const uploadPdf = useCallback(async (file: File) => {
     choiceD,
     correctAnswer,
     questionPoints,
+    timeLimit,
+    speedBonus,
   ])
 
   const deleteQuestion = useCallback(async () => {
@@ -690,7 +702,7 @@ const uploadPdf = useCallback(async (file: File) => {
         </label>
 
         <label className="block text-sm font-medium">
-          Points
+          Base points
           <input
             type="number"
             min={1}
@@ -699,6 +711,39 @@ const uploadPdf = useCallback(async (file: File) => {
             className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
           />
         </label>
+
+        <label className="block text-sm font-medium">
+          Time limit (seconds)
+          <input
+            type="number"
+            min={5}
+            max={300}
+            value={timeLimit}
+            onChange={(event) => setTimeLimit(Math.max(5, Number(event.target.value) || 15))}
+            className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+          />
+          <span className="mt-1 block text-xs text-muted-foreground">
+            Default: 15 seconds
+          </span>
+        </label>
+
+        <label className="block text-sm font-medium">
+          Speed bonus
+          <input
+            type="number"
+            min={0}
+            value={speedBonus}
+            onChange={(event) => setSpeedBonus(Math.max(0, Number(event.target.value) || 0))}
+            className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+          />
+          <span className="mt-1 block text-xs text-muted-foreground">
+            Maximum extra points for a fast correct answer
+          </span>
+        </label>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+        ⏱ {timeLimit}s per question · ⚡ Up to +{speedBonus} speed bonus · 🎯 {questionPoints} base point{questionPoints === 1 ? "" : "s"}
       </div>
 
       <button
